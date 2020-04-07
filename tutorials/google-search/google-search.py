@@ -7,11 +7,11 @@
 
 # Create a custom search engine here: 
 # https://cse.google.com/cse/all
-# Private CSE ID: 004723198555886821667:lr9hohyciei
+# Private CSE ID: #############################
 
 # Create an api key here:
 # https://developers.google.com/custom-search/v1/overview?csw=1
-# Private API Key: AIzaSyBnkRwluy5yu0ESYUPSrIgwzAvo_gbhSw4
+# Private API Key: ##################################
 
 # Install Google api with pip:
 # $ pip install google-api-python-client
