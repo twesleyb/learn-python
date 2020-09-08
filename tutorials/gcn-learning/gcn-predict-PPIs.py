@@ -7,14 +7,7 @@ from: http://snap.stanford.edu/deepnetbio-ismb/
 
 notes:
 
-# utilzes the following clases:
-* class GraphConvolution()
-* class GraphConvolutionSparse()
-* class InnerProductDecoder()
-* class GCNModel()
-* class Optimizer()
-
-# utilizes the following functions:
+# utilizes the following functions in Py/local.py:
 * def download_data
 * def load_data
 * def weight_variable_glorot
@@ -26,6 +19,14 @@ notes:
 * def ismember
 * def get_roc_score
 * def sigmoid
+
+
+# utilzes the following clases defined below:
+* class GraphConvolution
+* class GraphConvolutionSparse
+* class InnerProductDecoder
+* class GCNModel
+* class Optimizer
 
 '''
 
@@ -43,8 +44,6 @@ from __future__ import print_function
 import os
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 
-import sys
-
 import requests
 
 import time
@@ -58,16 +57,21 @@ import networkx as nx
 import tensorflow as tf
 
 from sklearn.metrics import roc_auc_score
+
 from sklearn.metrics import average_precision_score
+
+# local imports
+from Py import local
 
 # options -------------------------------------------------
 
+# set seed for reproducibility
 seed = 123
 np.random.seed(seed)
 tf.random.set_seed(seed)
 
-# Settings - outdated, use tf.compat module
-#flags = tf.app.flags
+# Settings - use of tf.app.flags is outdated,
+# use tf.compat module
 flags = tf.compat.v1.flags
 FLAGS = flags.FLAGS
 
@@ -82,242 +86,13 @@ flags.DEFINE_integer('hidden2', 16,
 flags.DEFINE_float('dropout', 0.1,
         'Dropout rate (1 - keep probability).')
 
-## function ismember -----------------------
-
-def ismember(a, b):
-    '''
-    '''
-    rows_close = np.all((a - b[:, None]) == 0, axis=-1)
-    return np.any(rows_close)
-
-## function sigmoid -----------------------
-
-def sigmoid(x):
-    '''
-    '''
-    return 1 / (1 + np.exp(-x))
-
-## function download_data -----------------------
-
-def download_data():
-    '''
-    download the data from stanford.edu
-    @import requests
-    '''
-    url='http://snap.stanford.edu/deepnetbio-ismb/ipynb/yeast.edgelist'
-    response = requests.get(url)
-    with  open(os.path.basename(url),'wb') as f:
-        f.write(response.content)
-
-## function load_data -----------------------
-
-def load_data():
-    '''
-    load yeast.edgelist as sparse matrix
-    @import networkx as nx
-    '''
-    g = nx.read_edgelist('yeast.edgelist')
-    adjm = nx.adjacency_matrix(g)
-    return adjm
-
-## function weight_variable_glorot -----------------------
-
-def weight_variable_glorot(input_dim,
-        output_dim, name=""):
-    '''
-    @import numpy as np
-    @import tensorflow as tf
-    '''
-    init_range = np.sqrt(6.0 / (input_dim + output_dim))
-    initial = tf.random_uniform(
-        [input_dim, output_dim], minval=-init_range,
-        maxval=init_range, dtype=tf.float32)
-    return tf.Variable(initial, name=name)
-
-## function dropout_sparse --------------------------------
-
-def dropout_sparse(x, keep_prob, num_nonzero_elems):
-    '''
-    @import tensorflow as tf
-    '''
-    noise_shape = [num_nonzero_elems]
-    random_tensor = keep_prob
-    random_tensor += tf.random_uniform(noise_shape)
-    dropout_mask = tf.cast(tf.floor(random_tensor),
-            dtype=tf.bool)
-    pre_out = tf.sparse_retain(x, dropout_mask)
-    return pre_out * (1. / keep_prob)
-
-## function sparse_to_tuple -------------------------------
-
-def sparse_to_tuple(sparse_mx):
-    '''
-    coerce sparse adjm to tuple coordinants
-    @import scipy.sparse as sp
-    @import numpy as np
-    '''
-    if not sp.isspmatrix_coo(sparse_mx):
-        sparse_mx = sparse_mx.tocoo()
-    coords = np.vstack((sparse_mx.row,
-        sparse_mx.col)).transpose()
-    values = sparse_mx.data
-    shape = sparse_mx.shape
-    return coords, values, shape
-
-## function preprocess_graph ------------------------------
-
-def preprocess_graph(adj):
-    '''
-    normalize the ppi matrix - 1/sqrt ... ?
-    @local sparse_to_tuple
-    @import scipy.sparse as sp
-    '''
-    adj = sp.coo_matrix(adj) # sp matrix coordinate format
-    adj_ = adj + sp.eye(adj.shape[0]) # diag = 1
-    rowsum = np.array(adj_.sum(1)) # node degree
-    degree_mat_inv_sqrt = sp.diags(np.power(rowsum, -0.5).flatten())
-    adj_normalized = adj_.dot(degree_mat_inv_sqrt).transpose().dot(degree_mat_inv_sqrt).tocoo()
-    return sparse_to_tuple(adj_normalized)
-
-## function construct_feed_dict ---------------------------
-
-def construct_feed_dict(adj_normalized,
-        adj, features, placeholders):
-    '''
-    '''
-    feed_dict = dict()
-    feed_dict.update({placeholders['features']: features})
-    feed_dict.update({placeholders['adj']: adj_normalized})
-    feed_dict.update({placeholders['adj_orig']: adj})
-    return feed_dict
-
-## function mask_test_edges -------------------------------
-
-def mask_test_edges(adj):
-    '''
-    Function to build test set with 2% positive links
-    Remove diagonal elements
-    @local sparse_to_tuple
-    @import scipy.sparse as sp
-    @import numpy as np
-    '''
-    adj = adj - sp.dia_matrix((adj.diagonal()[np.newaxis, :], [0]), shape=adj.shape)
-    adj.eliminate_zeros()
-    adj_triu = sp.triu(adj)
-    adj_tuple = sparse_to_tuple(adj_triu)
-    edges = adj_tuple[0]
-    edges_all = sparse_to_tuple(adj)[0]
-    num_test = int(np.floor(edges.shape[0] / 50.)) #2% =130
-    num_val = int(np.floor(edges.shape[0] / 50.))
-    all_edge_idx = range(edges.shape[0])
-    np.random.shuffle(list(all_edge_idx)) # added: list()
-    val_edge_idx = all_edge_idx[:num_val]
-    test_edge_idx = all_edge_idx[num_val:(num_val + num_test)]
-    test_edges = edges[test_edge_idx]
-    val_edges = edges[val_edge_idx]
-    train_edges = np.delete(edges, np.hstack([test_edge_idx, val_edge_idx]), axis=0)
-    #
-    test_edges_false = []
-    while len(test_edges_false) < len(test_edges):
-        '''
-        loop that does something
-        '''
-        n_rnd = len(test_edges) - len(test_edges_false)
-        rnd = np.random.randint(0, adj.shape[0], size=2 * n_rnd)
-        idxs_i = rnd[:n_rnd]
-        idxs_j = rnd[n_rnd:]
-        for i in range(n_rnd):
-            idx_i = idxs_i[i]
-            idx_j = idxs_j[i]
-            if idx_i == idx_j:
-                continue
-            if ismember([idx_i, idx_j], edges_all):
-                continue
-            if test_edges_false:
-                if ismember([idx_j, idx_i], np.array(test_edges_false)):
-                    continue
-                if ismember([idx_i, idx_j], np.array(test_edges_false)):
-                    continue
-            test_edges_false.append([idx_i, idx_j])
-    #EOL
-    val_edges_false = []
-    while len(val_edges_false) < len(val_edges):
-        '''
-        loop that does something else
-        '''
-        n_rnd = len(val_edges) - len(val_edges_false)
-        rnd = np.random.randint(0, adj.shape[0], size=2 * n_rnd)
-        idxs_i = rnd[:n_rnd]
-        idxs_j = rnd[n_rnd:]
-        for i in range(n_rnd):
-            idx_i = idxs_i[i]
-            idx_j = idxs_j[i]
-            if idx_i == idx_j:
-                continue
-            if ismember([idx_i, idx_j], train_edges):
-                continue
-            if ismember([idx_j, idx_i], train_edges):
-                continue
-            if ismember([idx_i, idx_j], val_edges):
-                continue
-            if ismember([idx_j, idx_i], val_edges):
-                continue
-            if val_edges_false:
-                if ismember([idx_j, idx_i], np.array(val_edges_false)):
-                    continue
-                if ismember([idx_i, idx_j], np.array(val_edges_false)):
-                    continue
-            val_edges_false.append([idx_i, idx_j])
-    #EOL
-    # Re-build adj matrix
-    data = np.ones(train_edges.shape[0])
-    adj_train = sp.csr_matrix((data, (train_edges[:, 0], train_edges[:, 1])), shape=adj.shape)
-    adj_train = adj_train + adj_train.T
-    return adj_train, train_edges, val_edges, val_edges_false, test_edges, test_edges_false
-#EOF
-
-## function get_roc_score --------------------------------
-
-def get_roc_score(edges_pos, edges_neg):
-    '''
-    # note: sess = tf session
-    @import numpy as np
-    @import tensorflow as tf
-    @import from sklearn.metrics import roc_auc_score
-    @import from sklearn.metrics import average_precision_score
-    '''
-    feed_dict.update({placeholders['dropout']: 0})
-    emb = sess.run(model.embeddings, feed_dict=feed_dict)
-    #
-    #
-    # Predict on test set of edges
-    adj_rec = np.dot(emb, emb.T)
-    preds = []
-    pos = []
-    for e in edges_pos:
-        preds.append(sigmoid(adj_rec[e[0], e[1]]))
-        pos.append(adj_orig[e[0], e[1]])
-    #
-    preds_neg = []
-    neg = []
-    for e in edges_neg:
-        preds_neg.append(sigmoid(adj_rec[e[0], e[1]]))
-        neg.append(adj_orig[e[0], e[1]])
-    #
-    preds_all = np.hstack([preds, preds_neg])
-    labels_all = np.hstack([np.ones(len(preds)), np.zeros(len(preds))])
-    roc_score = roc_auc_score(labels_all, preds_all)
-    ap_score = average_precision_score(labels_all, preds_all)
-    #
-    return roc_score, ap_score
-
-
 ## class GraphConvolution ---------------------------------
 
 class GraphConvolution():
     '''
     Basic graph convolution layer for undirected
     graph without edge labels.
+    @local weight_variable_glorot
     @import tensorflow as tf
     '''
     def __init__(self,
@@ -331,7 +106,7 @@ class GraphConvolution():
         self.vars = {}
         self.issparse = False
         with tf.variable_scope(self.name + '_vars'):
-            self.vars['weights'] = weight_variable_glorot(input_dim, output_dim, name='weights')
+            self.vars['weights'] = local.weight_variable_glorot(input_dim, output_dim, name='weights')
         self.dropout = dropout
         self.adj = adj
         self.act = act
@@ -348,6 +123,7 @@ class GraphConvolution():
 
 
 ## class GraphConvolutionSparse --------------------------
+
 class GraphConvolutionSparse():
     '''
     Graph convolution layer for sparse inputs.
@@ -358,7 +134,7 @@ class GraphConvolutionSparse():
         self.vars = {}
         self.issparse = False
         with tf.variable_scope(self.name + '_vars'):
-            self.vars['weights'] = weight_variable_glorot(input_dim, output_dim, name='weights')
+            self.vars['weights'] = local.weight_variable_glorot(input_dim, output_dim, name='weights')
         self.dropout = dropout
         self.adj = adj
         self.act = act
@@ -399,7 +175,6 @@ class InnerProductDecoder():
 #EOC
 
 ## class GCNModel -----------------------------------------
-# Specify the Architecture of our GCN Model
 
 class GCNModel():
     '''
@@ -449,6 +224,8 @@ class GCNModel():
 
 class Optimizer():
     '''
+    notes:
+    * uses the ADAM optimizer
     @import tensorflow as tf
     '''
     def __init__(self, preds, labels,
@@ -467,6 +244,7 @@ class Optimizer():
         self.opt_op = self.optimizer.minimize(self.cost)
         self.grads_vars = self.optimizer.compute_gradients(self.cost)
 
+
 ## main --------------------------------------------------
 # Train the model and and then evaluate its accuracy on a
 # Test Set of Protein-Protein Interactions
@@ -477,93 +255,115 @@ class Optimizer():
 # protein-protein interactions. That is, we would like to
 # predict new edges in the yeast PPI network.
 
-# download the data
-if 'yeast.edgelist' not in os.listdir():
-    print("Downloading the yeast PPI data.")
-    download_data()
+if __name__ == "__main__" :
 
-# create sparse adj matrix
-adj = load_data()
-num_nodes = adj.shape[0]
-num_edges = adj.sum()
+    # download the data
+    local.download_data()
 
-# Featureless
-features = sparse_to_tuple(sp.identity(num_nodes))
-num_features = features[2][1]
-features_nonzero = features[1].shape[0]
+    # create sparse adjacency matrix
+    adjm = local.load_data()
 
-# Store original adjacency matrix
-# (without diagonal entries) for later
-adj_orig = adj - sp.dia_matrix((adj.diagonal()[np.newaxis, :], [0]), shape=adj.shape)
-adj_orig.eliminate_zeros()
+    # summarize the network
+    num_nodes = adjm.shape[0]
+    num_edges = adjm.sum()
+    print("\nLoaded yeast PPI graph with:")
+    print("\tNumber of nodes: {}".format(num_nodes))
+    print("\tNumber of edges: {}".format(num_edges))
 
-adj_train, train_edges, val_edges, val_edges_false, test_edges, test_edges_false = mask_test_edges(adj)
+    # coerce graph to tuple describing the graphs features
+    #import scipy.sparse as sp
+    features = local.sparse_to_tuple(sp.identity(num_nodes))
 
-# Trying to figure out what's what
-# adj_train - sparse 6526 x 6526 matrix - 1,018,554 edges
-# train_edges - edges list, array len 509,277
-# val_edges - ?? array len 10,609 (2%?)
-# val_edges_false - array len 10,609
-# test_edges - array len 10,609
-# test_edges_false array len 10,609
+    num_features = features[2][1]
+    features_nonzero = features[1].shape[0]
 
-adj = adj_train
+    # Store original adjacency matrix
+    # (without diagonal entries) for later
+    #import numpy as np
+    adjm_orig = adjm - sp.dia_matrix((adjm.diagonal()[np.newaxis, :], [0]), shape=adjm.shape)
+    adjm_orig.eliminate_zeros()
 
-# do some normalization
-adj_norm = preprocess_graph(adj)
+    # generate the test and train datasets
+    # NOTE: this takes some time
+    # i think this takes a bunch of time bc its looping to create the test/train data in some sort of random process
+    adjm_train, train_edges, val_edges, val_edges_false, test_edges, test_edges_false = local.mask_test_edges(adjm)
 
-# Define placeholders
-placeholders = {
-    'features': tf.sparse_placeholder(tf.float32),
-    'adj': tf.sparse_placeholder(tf.float32),
-    'adj_orig': tf.sparse_placeholder(tf.float32),
-    'dropout': tf.placeholder_with_default(0., shape=())
-}
+    # Trying to figure out what's what
+    # adj_train - sparse 6526 x 6526 matrix - 1,018,554 edges
+    #             this is the input matrix?
+    # train_edges - edges list, array len 509,277
+    # val_edges - ?? array len 10,609 (2%?)
+    # val_edges_false - array len 10,609
+    # test_edges - array len 10,609
+    # test_edges_false array len 10,609
 
-# Create model
-model = GCNModel(placeholders,
-        num_features,
-        features_nonzero,
-        name='yeast_gcn')
+    adjm = adjm_train
 
-# Create optimizer
-with tf.name_scope('optimizer'):
-    opt = Optimizer(
-        preds=model.reconstructions,
-        labels=tf.reshape(tf.sparse_tensor_to_dense(placeholders['adj_orig'], validate_indices=False), [-1]),
-        num_nodes=num_nodes,
-        num_edges=num_edges)
+    # do some normalization
+    adjm_norm = local.preprocess_graph(adjm)
 
+    # Define placeholders
+    # tf.sparse_placehoder is deprecated, use compat module
+    #import tensorflow as tf
+    # error: sparse_placeholder` is not compatible with
+    #        eager execution
+    # using compat.v1.float32 does not seem to fix
 
-# Initialize session
-sess = tf.Session()
-sess.run(tf.global_variables_initializer())
+    # FIXME: breaks here?
+    from tensorflow.compat.v1 import float32 as f32
+    placeholders = {
+        'features': tf.compat.v1.sparse_placeholder(f32),
+        'adj': tf.v1.compat.v1.sparse_placeholder(f32),
+        'adj_orig': tf.compat.v1.sparse_placeholder(f32),
+        'dropout': tf.compat.v1.placeholder_with_default(0., shape=())
+    }
 
-adj_label = adj_train + sp.eye(adj_train.shape[0])
-adj_label = sparse_to_tuple(adj_label)
+    # Create model
+    model = GCNModel(placeholders,
+            num_features,
+            features_nonzero,
+            name='yeast_gcn')
 
-# Train model
-for epoch in range(FLAGS.epochs):
-    t = time.time()
-    # Construct feed dictionary
-    feed_dict = construct_feed_dict(adj_norm,
-            adj_label, features, placeholders)
-    feed_dict.update({placeholders['dropout']: FLAGS.dropout})
-    # One update of parameter matrices
-    _, avg_cost = sess.run([opt.opt_op, opt.cost],
-            feed_dict=feed_dict)
-    # Performance on validation set
-    roc_curr, ap_curr = get_roc_score(val_edges,
-            val_edges_false)
+    # create optimizer
+    with tf.name_scope('optimizer'):
+        opt = Optimizer(
+            preds=model.reconstructions,
+            labels=tf.reshape(tf.sparse_tensor_to_dense(placeholders['adj_orig'], validate_indices=False), [-1]),
+            num_nodes=num_nodes,
+            num_edges=num_edges)
 
-    print("Epoch:", '%04d' % (epoch + 1),
-          "train_loss=", "{:.5f}".format(avg_cost),
-          "val_roc=", "{:.5f}".format(roc_curr),
-          "val_ap=", "{:.5f}".format(ap_curr),
-          "time=", "{:.5f}".format(time.time() - t))
+    # initialize tensorflow session
+    sess = tf.Session()
+    sess.run(tf.global_variables_initializer())
 
-print('Optimization Finished!')
+    adj_label = adj_train + sp.eye(adj_train.shape[0])
+    adj_label = sparse_to_tuple(adj_label)
 
-roc_score, ap_score = get_roc_score(test_edges, test_edges_false)
-print('Test ROC score: {:.5f}'.format(roc_score))
-print('Test AP score: {:.5f}'.format(ap_score))
+    # train model
+    for epoch in range(FLAGS.epochs):
+        t = time.time()
+        # Construct feed dictionary
+        feed_dict = construct_feed_dict(adj_norm,
+                adj_label, features, placeholders)
+        feed_dict.update({placeholders['dropout']: FLAGS.dropout})
+        # One update of parameter matrices
+        _, avg_cost = sess.run([opt.opt_op, opt.cost],
+                feed_dict=feed_dict)
+        # Performance on validation set
+        roc_curr, ap_curr = get_roc_score(val_edges,
+                val_edges_false)
+        # Progress report:
+        print("Epoch:", '%04d' % (epoch + 1),
+              "train_loss=", "{:.5f}".format(avg_cost),
+              "val_roc=", "{:.5f}".format(roc_curr),
+              "val_ap=", "{:.5f}".format(ap_curr),
+              "time=", "{:.5f}".format(time.time() - t))
+    #EOL
+    print('Optimization Finished!')
+
+    # Print the results:
+    roc_score, ap_score = get_roc_score(test_edges,
+            test_edges_false)
+    print('Test ROC score: {:.5f}'.format(roc_score))
+    print('Test AP score: {:.5f}'.format(ap_score))
+#EOF

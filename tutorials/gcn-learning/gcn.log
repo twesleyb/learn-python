@@ -1,0 +1,10 @@
+/home/twesleyb/projects/learn-python/tutorials/gcn-learning/Py/local.py:56: UserWarning: Overwriting existing file: 'yeast.edgelist'.
+  warnings.warn("Overwriting existing file: 'yeast.edgelist'.")
+Number of edges: 1062675
+Number of nodes: 6526
+Traceback (most recent call last):
+  File "./gcn-predict-PPIs.py", line 311, in <module>
+    
+  File "/home/twesleyb/base/lib/python3.8/site-packages/tensorflow/python/ops/array_ops.py", line 3168, in sparse_placeholder
+    raise RuntimeError("`sparse_placeholder` is not compatible with "
+RuntimeError: `sparse_placeholder` is not compatible with eager execution.
