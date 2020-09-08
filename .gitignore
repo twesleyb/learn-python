@@ -2,3 +2,4 @@ downloads/
 ARCHIVE/
 *.log
 *.err
+__pycache__/

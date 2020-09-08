@@ -83,7 +83,8 @@ def weight_variable_glorot(input_dim,
     @import tensorflow as tf
     '''
     init_range = np.sqrt(6.0 / (input_dim + output_dim))
-    initial = tf.random_uniform(
+    # random_uniform is deprecated, instead use:
+    initial = tf.compat.v1.random_uniform(
         [input_dim, output_dim], minval=-init_range,
         maxval=init_range, dtype=tf.float32)
     return tf.Variable(initial, name=name)
@@ -96,7 +97,7 @@ def dropout_sparse(x, keep_prob, num_nonzero_elems):
     '''
     noise_shape = [num_nonzero_elems]
     random_tensor = keep_prob
-    random_tensor += tf.random_uniform(noise_shape)
+    random_tensor += tf.compat.v1.random_uniform(noise_shape)
     dropout_mask = tf.cast(tf.floor(random_tensor),
             dtype=tf.bool)
     pre_out = tf.sparse_retain(x, dropout_mask)

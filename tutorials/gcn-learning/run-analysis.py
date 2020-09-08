@@ -44,6 +44,8 @@ from __future__ import print_function
 import os
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 
+import sys
+
 import requests
 
 import time
@@ -105,7 +107,7 @@ class GraphConvolution():
         self.name = name
         self.vars = {}
         self.issparse = False
-        with tf.variable_scope(self.name + '_vars'):
+        with tf.compat.v1.variable_scope(self.name + '_vars'):
             self.vars['weights'] = local.weight_variable_glorot(input_dim, output_dim, name='weights')
         self.dropout = dropout
         self.adj = adj
@@ -133,7 +135,7 @@ class GraphConvolutionSparse():
         self.name = name
         self.vars = {}
         self.issparse = False
-        with tf.variable_scope(self.name + '_vars'):
+        with tf.compat.v1.variable_scope(self.name + '_vars'):
             self.vars['weights'] = local.weight_variable_glorot(input_dim, output_dim, name='weights')
         self.dropout = dropout
         self.adj = adj
@@ -191,7 +193,8 @@ class GCNModel():
         self.features_nonzero = features_nonzero
         self.adj = placeholders['adj']
         self.dropout = placeholders['dropout']
-        with tf.variable_scope(self.name):
+        # tf.variable_scope is deprecated, instead use:
+        with tf.compat.v1.variable_scope(self.name):
             self.build()
     #
     def build(self):
@@ -263,7 +266,7 @@ if __name__ == "__main__" :
     # create sparse adjacency matrix
     adjm = local.load_data()
 
-    # summarize the network
+    # quick summary of the network:
     num_nodes = adjm.shape[0]
     num_edges = adjm.sum()
     print("\nLoaded yeast PPI graph with:")
@@ -284,8 +287,10 @@ if __name__ == "__main__" :
     adjm_orig.eliminate_zeros()
 
     # generate the test and train datasets
-    # NOTE: this takes some time
+    # NOTE: this takes some time...
     # i think this takes a bunch of time bc its looping to create the test/train data in some sort of random process
+    print("Generating test and train datasets.",
+    "This will take several minutes.",file=sys.stderr)
     adjm_train, train_edges, val_edges, val_edges_false, test_edges, test_edges_false = local.mask_test_edges(adjm)
 
     # Trying to figure out what's what
@@ -303,22 +308,22 @@ if __name__ == "__main__" :
     adjm_norm = local.preprocess_graph(adjm)
 
     # Define placeholders
-    # tf.sparse_placehoder is deprecated, use compat module
-    #import tensorflow as tf
-    # error: sparse_placeholder` is not compatible with
-    #        eager execution
-    # using compat.v1.float32 does not seem to fix
 
-    # FIXME: breaks here?
+    # to fix the runtime error, before defining placeholders, set:
+    tf.compat.v1.disable_eager_execution()
+
+    # for simplicity, load float32 type as f32
     from tensorflow.compat.v1 import float32 as f32
+
     placeholders = {
         'features': tf.compat.v1.sparse_placeholder(f32),
-        'adj': tf.v1.compat.v1.sparse_placeholder(f32),
+        'adj': tf.compat.v1.sparse_placeholder(f32),
         'adj_orig': tf.compat.v1.sparse_placeholder(f32),
         'dropout': tf.compat.v1.placeholder_with_default(0., shape=())
     }
 
     # Create model
+    #FIXME: no module random_uniform, breaks here
     model = GCNModel(placeholders,
             num_features,
             features_nonzero,
